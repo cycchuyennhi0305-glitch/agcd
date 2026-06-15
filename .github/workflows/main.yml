@@ -37,22 +37,33 @@ jobs:
         # Dùng SSH để tạo tunnel qua Pinggy chạy ngầm
         # Tách riêng 2 file log để tránh lỗi conflict của PowerShell
         Start-Process -FilePath "ssh" -ArgumentList "-p 443 -R0:localhost:3389 -o StrictHostKeyChecking=no tcp@a.pinggy.io" -NoNewWindow -RedirectStandardOutput pinggy_out.log -RedirectStandardError pinggy_err.log
-        
-        # Chờ 5 giây để máy chủ Pinggy cấp phát địa chỉ IP và Port
-        Start-Sleep -Seconds 5
 
-    - name: 3. Lấy Thông tin Kết nối RDP
+    - name: 3. Lấy Thông tin Kết nối RDP (Cơ chế vòng lặp chờ)
       run: |
-        Write-Host "Dang doc thong tin tu Pinggy..."
-        $logContent = ""
+        Write-Host "Dang doi Pinggy cap phat dia chi tunnel..."
+        $retryCount = 0
+        $rdpAddress = $null
         
-        # Gom nội dung từ cả 2 file log lại để tìm địa chỉ IP
-        if (Test-Path pinggy_out.log) { $logContent += Get-Content pinggy_out.log -Raw -ErrorAction SilentlyContinue }
-        if (Test-Path pinggy_err.log) { $logContent += Get-Content pinggy_err.log -Raw -ErrorAction SilentlyContinue }
+        # Vòng lặp chờ tối đa 10 lần (khoảng 50 giây)
+        while ($null -eq $rdpAddress -and $retryCount -lt 10) {
+            Start-Sleep -Seconds 5
+            $logContent = ""
+            
+            # Gom nội dung từ cả 2 file log lại để tìm địa chỉ IP
+            if (Test-Path pinggy_out.log) { $logContent += Get-Content pinggy_out.log -Raw -ErrorAction SilentlyContinue }
+            if (Test-Path pinggy_err.log) { $logContent += Get-Content pinggy_err.log -Raw -ErrorAction SilentlyContinue }
+            
+            # Tìm và trích xuất địa chỉ IP/Port bằng Regex
+            if ($logContent -match 'tcp://([a-zA-Z0-9.-]+:\d+)') {
+                $rdpAddress = $matches[1]
+            } else {
+                Write-Host "Chua co dia chi, dang doi them... ($($retryCount + 1)/10)"
+                $retryCount++
+            }
+        }
         
-        # Tìm và trích xuất địa chỉ IP/Port bằng Regex
-        if ($logContent -match 'tcp://([a-zA-Z0-9.-]+:\d+)') {
-            $rdpAddress = $matches[1]
+        # Kiểm tra kết quả sau vòng lặp
+        if ($null -ne $rdpAddress) {
             Write-Host "`n========================================"
             Write-Host " KET NOI RDP CUA BAN TAI:"
             Write-Host " Address : $rdpAddress"
@@ -60,10 +71,10 @@ jobs:
             Write-Host " Password: (Secret ban da dat)"
             Write-Host "========================================`n"
         } else {
-            Write-Error "Khong tim thay dia chi Pinggy trong log."
-            Write-Host "--- LOG OUT ---"
+            Write-Error "Khong tim thay dia chi Pinggy trong log sau 50 giay."
+            Write-Host "--- CHI TIET LOG OUT ---"
             if (Test-Path pinggy_out.log) { cat pinggy_out.log }
-            Write-Host "--- LOG ERR ---"
+            Write-Host "--- CHI TIET LOG ERR ---"
             if (Test-Path pinggy_err.log) { cat pinggy_err.log }
             exit 1
         }
