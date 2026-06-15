@@ -9,30 +9,7 @@ jobs:
     timeout-minutes: 9999
 
     steps:
-    - name: 1. Cài đặt Ngrok mới nhất qua Chocolatey
-      run: |
-        # Sử dụng choco để cài đặt ngrok giúp tránh lỗi link tải bị hỏng
-        choco install ngrok -y
-        
-        # Tạo file duy trì workflow
-        $loopBat = @"
-        @echo off
-        :loop
-        timeout /t 300 /nobreak
-        goto loop
-        "@
-        $loopBat | Out-File -FilePath loop.bat -Encoding ASCII
-
-    - name: 2. Kết nối Tài khoản Ngrok
-      run: |
-        if ("${{ secrets.NGROK_AUTH_TOKEN }}" -eq "") {
-          Write-Error "Loi: Thieu NGROK_AUTH_TOKEN trong Repository Secrets!"
-          exit 1
-        }
-        # Ngrok v3 dùng lệnh 'config add-authtoken'
-        ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-
-    - name: 3. Kích hoạt RDP và Cấu hình Mật khẩu
+    - name: 1. Kích hoạt RDP và Cấu hình Mật khẩu
       run: | 
         $pass = "${{ secrets.RDP_PASSWORD }}"
         if ($pass -eq "") { $pass = "P@ssword1234" }
@@ -45,53 +22,43 @@ jobs:
         # Mở Firewall cho cổng 3389
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
-
-    - name: 4. Khởi tạo Tunnel Ngrok (Port 3389)
-      run: |
-        # Chạy ngrok v3 ở chế độ nền
-        # Dùng -NoNewWindow để tránh lỗi pop-up cửa sổ trên Github Actions
-        # Dùng --log=ngrok.log để tắt giao diện TUI của Ngrok, tránh lỗi crash
-        Start-Process -FilePath ngrok -ArgumentList "tcp 3389 --region ap --log=ngrok.log" -NoNewWindow
         
-        # Thêm một chút thời gian trễ để đảm bảo tunnel kịp khởi tạo xong
-        Start-Sleep -Seconds 3
+        # Tạo file duy trì workflow
+        $loopBat = @"
+        @echo off
+        :loop
+        timeout /t 300 /nobreak
+        goto loop
+        "@
+        $loopBat | Out-File -FilePath loop.bat -Encoding ASCII
 
-    - name: 5. Lấy Thông tin Kết nối RDP (Có cơ chế Retry)
+    - name: 2. Khởi tạo Tunnel Pinggy (Không cần tài khoản/thẻ)
       run: |
-        Write-Host "Dang doi Ngrok lay dia chi tunnel..."
-        $retryCount = 0
-        $ngrokApi = $null
-        while ($null -eq $ngrokApi -and $retryCount -lt 6) {
-            try {
-                $ngrokApi = Invoke-RestMethod http://localhost:4040/api/tunnels -ErrorAction Stop
-            } catch {
-                Write-Host "Dang thu lai... ($($retryCount + 1)/6)"
-                Start-Sleep -Seconds 10
-                $retryCount++
-            }
-        }
+        # Dùng SSH để tạo tunnel qua Pinggy chạy ngầm và ghi log
+        Start-Process -FilePath "ssh" -ArgumentList "-p 443 -R0:localhost:3389 -o StrictHostKeyChecking=no tcp@a.pinggy.io" -NoNewWindow -RedirectStandardOutput pinggy.log -RedirectStandardError pinggy.log
         
-        if ($null -ne $ngrokApi) {
-            $publicUrl = $ngrokApi.tunnels.public_url
+        # Chờ 5 giây để máy chủ Pinggy cấp phát địa chỉ IP và Port
+        Start-Sleep -Seconds 5
+
+    - name: 3. Lấy Thông tin Kết nối RDP
+      run: |
+        Write-Host "Dang doc thong tin tu Pinggy..."
+        $logContent = Get-Content pinggy.log -Raw
+        
+        # Tìm và trích xuất địa chỉ IP/Port bằng Regex
+        if ($logContent -match 'tcp://([a-zA-Z0-9.-]+:\d+)') {
+            $rdpAddress = $matches[1]
             Write-Host "`n========================================"
             Write-Host " KET NOI RDP CUA BAN TAI:"
-            Write-Host " Address : $publicUrl"
+            Write-Host " Address : $rdpAddress"
             Write-Host " Username: runneradmin"
             Write-Host " Password: (Secret ban da dat)"
             Write-Host "========================================`n"
         } else {
-            Write-Error "Khong the ket noi voi Ngrok API."
+            Write-Error "Khong tim thay dia chi Pinggy trong log."
+            cat pinggy.log
             exit 1
         }
 
-    - name: Debug Ngrok Log (Nếu có lỗi)
-      if: failure()
-      run: |
-        if (Test-Path ngrok.log) {
-            cat ngrok.log
-        } else {
-            Write-Host "Khong tim thay file log cua Ngrok."
-        }
-
-    - name: 6. Duy trì Workflow
+    - name: 4. Duy trì Workflow
       run: .\loop.bat
