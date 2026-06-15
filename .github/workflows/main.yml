@@ -49,7 +49,12 @@ jobs:
     - name: 4. Khởi tạo Tunnel Ngrok (Port 3389)
       run: |
         # Chạy ngrok v3 ở chế độ nền
-        Start-Process ngrok -ArgumentList "tcp 3389 --region ap"
+        # Dùng -NoNewWindow để tránh lỗi pop-up cửa sổ trên Github Actions
+        # Dùng --log=ngrok.log để tắt giao diện TUI của Ngrok, tránh lỗi crash
+        Start-Process -FilePath ngrok -ArgumentList "tcp 3389 --region ap --log=ngrok.log" -NoNewWindow
+        
+        # Thêm một chút thời gian trễ để đảm bảo tunnel kịp khởi tạo xong
+        Start-Sleep -Seconds 3
 
     - name: 5. Lấy Thông tin Kết nối RDP (Có cơ chế Retry)
       run: |
@@ -77,6 +82,15 @@ jobs:
         } else {
             Write-Error "Khong the ket noi voi Ngrok API."
             exit 1
+        }
+
+    - name: Debug Ngrok Log (Nếu có lỗi)
+      if: failure()
+      run: |
+        if (Test-Path ngrok.log) {
+            cat ngrok.log
+        } else {
+            Write-Host "Khong tim thay file log cua Ngrok."
         }
 
     - name: 6. Duy trì Workflow
