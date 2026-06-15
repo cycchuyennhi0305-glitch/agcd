@@ -1,41 +1,8 @@
-name: Windows2022
-
-on: 
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: windows-2022
-    timeout-minutes: 9999
-
-    steps:
-    - name: 1. Kích hoạt RDP và Cấu hình Mật khẩu
-      run: | 
-        $pass = "${{ secrets.RDP_PASSWORD }}"
-        if ($pass -eq "") { $pass = "P@ssword1234" }
-        net user runneradmin $pass
-        
-        # Cấu hình hệ thống cho phép RDP
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
-        
-        # Mở Firewall cho cổng 3389
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-        netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
-        
-        # Tạo file duy trì workflow
-        $loopBat = @"
-        @echo off
-        :loop
-        timeout /t 300 /nobreak
-        goto loop
-        "@
-        $loopBat | Out-File -FilePath loop.bat -Encoding ASCII
-
-    - name: 2. Khởi tạo Tunnel Pinggy (Không cần tài khoản/thẻ)
+- name: 2. Khởi tạo Tunnel Pinggy (Không cần tài khoản/thẻ)
       run: |
-        # Dùng SSH để tạo tunnel qua Pinggy chạy ngầm và ghi log
-        Start-Process -FilePath "ssh" -ArgumentList "-p 443 -R0:localhost:3389 -o StrictHostKeyChecking=no tcp@a.pinggy.io" -NoNewWindow -RedirectStandardOutput pinggy.log -RedirectStandardError pinggy.log
+        # Dùng SSH để tạo tunnel qua Pinggy chạy ngầm
+        # Tách riêng 2 file log để tránh lỗi conflict của PowerShell
+        Start-Process -FilePath "ssh" -ArgumentList "-p 443 -R0:localhost:3389 -o StrictHostKeyChecking=no tcp@a.pinggy.io" -NoNewWindow -RedirectStandardOutput pinggy_out.log -RedirectStandardError pinggy_err.log
         
         # Chờ 5 giây để máy chủ Pinggy cấp phát địa chỉ IP và Port
         Start-Sleep -Seconds 5
@@ -43,7 +10,11 @@ jobs:
     - name: 3. Lấy Thông tin Kết nối RDP
       run: |
         Write-Host "Dang doc thong tin tu Pinggy..."
-        $logContent = Get-Content pinggy.log -Raw
+        $logContent = ""
+        
+        # Gom nội dung từ cả 2 file log lại để tìm địa chỉ IP
+        if (Test-Path pinggy_out.log) { $logContent += Get-Content pinggy_out.log -Raw -ErrorAction SilentlyContinue }
+        if (Test-Path pinggy_err.log) { $logContent += Get-Content pinggy_err.log -Raw -ErrorAction SilentlyContinue }
         
         # Tìm và trích xuất địa chỉ IP/Port bằng Regex
         if ($logContent -match 'tcp://([a-zA-Z0-9.-]+:\d+)') {
@@ -56,9 +27,9 @@ jobs:
             Write-Host "========================================`n"
         } else {
             Write-Error "Khong tim thay dia chi Pinggy trong log."
-            cat pinggy.log
+            Write-Host "--- LOG OUT ---"
+            if (Test-Path pinggy_out.log) { cat pinggy_out.log }
+            Write-Host "--- LOG ERR ---"
+            if (Test-Path pinggy_err.log) { cat pinggy_err.log }
             exit 1
         }
-
-    - name: 4. Duy trì Workflow
-      run: .\loop.bat
