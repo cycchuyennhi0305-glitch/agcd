@@ -32,50 +32,41 @@ jobs:
         "@
         $loopBat | Out-File -FilePath loop.bat -Encoding ASCII
 
-    - name: 2. Khởi tạo Tunnel Pinggy (Không cần tài khoản/thẻ)
+    - name: 2. Tải và Khởi tạo Tunnel bằng Bore (Giải pháp dứt điểm)
       run: |
-        # Dùng SSH để tạo tunnel qua Pinggy chạy ngầm
-        # Tách riêng 2 file log để tránh lỗi conflict của PowerShell
-        Start-Process -FilePath "ssh" -ArgumentList "-p 443 -R0:localhost:3389 -o StrictHostKeyChecking=no tcp@a.pinggy.io" -NoNewWindow -RedirectStandardOutput pinggy_out.log -RedirectStandardError pinggy_err.log
+        Write-Host "Dang tai cong cu Bore Tunnel..."
+        Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-pc-windows-msvc.zip" -OutFile bore.zip
+        Expand-Archive bore.zip -DestinationPath .
+        
+        Write-Host "Khoi chay Bore Tunnel vao cong 3389..."
+        # Bore là file exe độc lập, chạy rất mượt và không bị kẹt như SSH
+        Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -NoNewWindow -RedirectStandardOutput bore_out.log -RedirectStandardError bore_err.log
+        
+        # Chờ 5 giây để Bore lấy Port từ server
+        Start-Sleep -Seconds 5
 
-    - name: 3. Lấy Thông tin Kết nối RDP (Cơ chế vòng lặp chờ)
+    - name: 3. Lấy Thông tin Kết nối RDP
       run: |
-        Write-Host "Dang doi Pinggy cap phat dia chi tunnel..."
-        $retryCount = 0
-        $rdpAddress = $null
+        $logContent = ""
+        # Đọc 2 file log giống như cách làm an toàn trước đó
+        if (Test-Path bore_out.log) { $logContent += Get-Content bore_out.log -Raw -ErrorAction SilentlyContinue }
+        if (Test-Path bore_err.log) { $logContent += Get-Content bore_err.log -Raw -ErrorAction SilentlyContinue }
         
-        # Vòng lặp chờ tối đa 10 lần (khoảng 50 giây)
-        while ($null -eq $rdpAddress -and $retryCount -lt 10) {
-            Start-Sleep -Seconds 5
-            $logContent = ""
-            
-            # Gom nội dung từ cả 2 file log lại để tìm địa chỉ IP
-            if (Test-Path pinggy_out.log) { $logContent += Get-Content pinggy_out.log -Raw -ErrorAction SilentlyContinue }
-            if (Test-Path pinggy_err.log) { $logContent += Get-Content pinggy_err.log -Raw -ErrorAction SilentlyContinue }
-            
-            # Tìm và trích xuất địa chỉ IP/Port bằng Regex
-            if ($logContent -match 'tcp://([a-zA-Z0-9.-]+:\d+)') {
-                $rdpAddress = $matches[1]
-            } else {
-                Write-Host "Chua co dia chi, dang doi them... ($($retryCount + 1)/10)"
-                $retryCount++
-            }
-        }
-        
-        # Kiểm tra kết quả sau vòng lặp
-        if ($null -ne $rdpAddress) {
+        # Tìm cổng (port) mà server Bore cấp phát (ví dụ: remote_port=12345)
+        if ($logContent -match 'remote_port=(\d+)') {
+            $port = $matches[1]
             Write-Host "`n========================================"
             Write-Host " KET NOI RDP CUA BAN TAI:"
-            Write-Host " Address : $rdpAddress"
+            Write-Host " Address : bore.pub:$port"
             Write-Host " Username: runneradmin"
             Write-Host " Password: (Secret ban da dat)"
             Write-Host "========================================`n"
         } else {
-            Write-Error "Khong tim thay dia chi Pinggy trong log sau 50 giay."
-            Write-Host "--- CHI TIET LOG OUT ---"
-            if (Test-Path pinggy_out.log) { cat pinggy_out.log }
-            Write-Host "--- CHI TIET LOG ERR ---"
-            if (Test-Path pinggy_err.log) { cat pinggy_err.log }
+            Write-Error "Khong the tao tunnel. Xem chi tiet log cua Bore de biet loi:"
+            Write-Host "--- LOG OUT ---"
+            if (Test-Path bore_out.log) { cat bore_out.log }
+            Write-Host "--- LOG ERR ---"
+            if (Test-Path bore_err.log) { cat bore_err.log }
             exit 1
         }
 
