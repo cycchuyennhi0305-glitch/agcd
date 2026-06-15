@@ -15,27 +15,30 @@ jobs:
         if ($pass -eq "") { $pass = "P@ssword1234" }
         net user runneradmin $pass
         
-        # 1. Cho phép RDP
+        # Cho phép kết nối RDP
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         
-        # 2. Tắt NLA
+        # Tắt NLA và hạ mức Security Layer để tương thích với cổng Tunnel
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-        
-        # 3. [MỚI] Hạ lớp bảo mật xuống mức cơ bản để chấp nhận Tunnel
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1
         
-        # 4. Mở Firewall
+        # Mở Firewall cho cổng 3389
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-        netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
         
-        # 5. [MỚI] Ép khởi động lại dịch vụ RDP để áp dụng ngay lập tức
-        Restart-Service TermService -Force
+        # [QUAN TRỌNG] Cho phép RDP nhận dữ liệu Loopback từ Tunnel (127.0.0.1)
+        New-NetFirewallRule -DisplayName "RDP Loopback" -Direction Inbound -LocalPort 3389 -Protocol TCP -LocalAddress 127.0.0.1 -Action Allow
+        
+        # Ghi chú: KHÔNG dùng Restart-Service TermService ở môi trường Github Actions
 
     - name: 2. Tải và Khởi tạo Tunnel bằng Bore
       run: |
         Write-Host "Dang tai cong cu Bore Tunnel..."
         Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-pc-windows-msvc.zip" -OutFile bore.zip
         Expand-Archive bore.zip -DestinationPath .
+        
+        # [QUAN TRỌNG] Cấp quyền Firewall In/Out cho công cụ Bore
+        New-NetFirewallRule -DisplayName "Allow Bore" -Direction Inbound -Program "$PWD\bore.exe" -Action Allow
+        New-NetFirewallRule -DisplayName "Allow Bore Out" -Direction Outbound -Program "$PWD\bore.exe" -Action Allow
         
         Write-Host "Khoi chay Bore Tunnel vao cong 3389..."
         $env:NO_COLOR="1"
@@ -51,6 +54,7 @@ jobs:
             Start-Sleep -Seconds 4
             $logContent = ""
             
+            # Đọc log an toàn chống khóa file
             if (Test-Path bore_out.log) { Copy-Item bore_out.log temp_out.log -ErrorAction SilentlyContinue; $logContent += Get-Content temp_out.log -Raw -ErrorAction SilentlyContinue }
             if (Test-Path bore_err.log) { Copy-Item bore_err.log temp_err.log -ErrorAction SilentlyContinue; $logContent += Get-Content temp_err.log -Raw -ErrorAction SilentlyContinue }
             
