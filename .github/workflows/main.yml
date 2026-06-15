@@ -15,15 +15,21 @@ jobs:
         if ($pass -eq "") { $pass = "P@ssword1234" }
         net user runneradmin $pass
         
-        # Cấu hình hệ thống cho phép RDP
+        # 1. Cho phép RDP
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         
-        # TẮT BẢO MẬT NLA (Sửa thành Value 0) để tránh lỗi chấm đỏ khi dùng Tunnel
+        # 2. Tắt NLA
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
         
-        # Mở Firewall cho cổng 3389
+        # 3. [MỚI] Hạ lớp bảo mật xuống mức cơ bản để chấp nhận Tunnel
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1
+        
+        # 4. Mở Firewall
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
+        
+        # 5. [MỚI] Ép khởi động lại dịch vụ RDP để áp dụng ngay lập tức
+        Restart-Service TermService -Force
 
     - name: 2. Tải và Khởi tạo Tunnel bằng Bore
       run: |
@@ -45,7 +51,6 @@ jobs:
             Start-Sleep -Seconds 4
             $logContent = ""
             
-            # Copy file log ra một bản tạm để tránh lỗi Windows khóa file
             if (Test-Path bore_out.log) { Copy-Item bore_out.log temp_out.log -ErrorAction SilentlyContinue; $logContent += Get-Content temp_out.log -Raw -ErrorAction SilentlyContinue }
             if (Test-Path bore_err.log) { Copy-Item bore_err.log temp_err.log -ErrorAction SilentlyContinue; $logContent += Get-Content temp_err.log -Raw -ErrorAction SilentlyContinue }
             
@@ -75,10 +80,9 @@ jobs:
             exit 1
         }
 
-    - name: 4. Duy trì Workflow (Đã Fix lỗi Spam)
+    - name: 4. Duy trì Workflow
       run: |
         Write-Host "He thong RDP dang chay ngon lanh! Ban co the ket noi ngay bay gio."
-        # Vòng lặp ngủ im lặng bằng PowerShell, kéo dài thời gian sống của máy ảo
         while ($true) {
             Start-Sleep -Seconds 300
             Write-Host "Ping... Workflow van dang hoat dong tot."
