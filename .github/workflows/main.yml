@@ -32,29 +32,40 @@ jobs:
         "@
         $loopBat | Out-File -FilePath loop.bat -Encoding ASCII
 
-    - name: 2. Tải và Khởi tạo Tunnel bằng Bore (Giải pháp dứt điểm)
+    - name: 2. Tải và Khởi tạo Tunnel bằng Bore
       run: |
         Write-Host "Dang tai cong cu Bore Tunnel..."
         Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-pc-windows-msvc.zip" -OutFile bore.zip
         Expand-Archive bore.zip -DestinationPath .
         
         Write-Host "Khoi chay Bore Tunnel vao cong 3389..."
-        # Bore là file exe độc lập, chạy rất mượt và không bị kẹt như SSH
+        # Chạy Bore ngầm và ghi log
         Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -NoNewWindow -RedirectStandardOutput bore_out.log -RedirectStandardError bore_err.log
-        
-        # Chờ 5 giây để Bore lấy Port từ server
-        Start-Sleep -Seconds 5
 
-    - name: 3. Lấy Thông tin Kết nối RDP
+    - name: 3. Lấy Thông tin Kết nối RDP (Vòng lặp chờ an toàn)
       run: |
-        $logContent = ""
-        # Đọc 2 file log giống như cách làm an toàn trước đó
-        if (Test-Path bore_out.log) { $logContent += Get-Content bore_out.log -Raw -ErrorAction SilentlyContinue }
-        if (Test-Path bore_err.log) { $logContent += Get-Content bore_err.log -Raw -ErrorAction SilentlyContinue }
+        Write-Host "Dang doi Bore cap phat port..."
+        $retryCount = 0
+        $port = $null
         
-        # Tìm cổng (port) mà server Bore cấp phát (ví dụ: remote_port=12345)
-        if ($logContent -match 'remote_port=(\d+)') {
-            $port = $matches[1]
+        # Vòng lặp chờ tối đa 15 lần (khoảng 60 giây) để đảm bảo server kịp phản hồi
+        while ($null -eq $port -and $retryCount -lt 15) {
+            Start-Sleep -Seconds 4
+            $logContent = ""
+            
+            # Đọc log để tìm port
+            if (Test-Path bore_out.log) { $logContent += Get-Content bore_out.log -Raw -ErrorAction SilentlyContinue }
+            if (Test-Path bore_err.log) { $logContent += Get-Content bore_err.log -Raw -ErrorAction SilentlyContinue }
+            
+            if ($logContent -match 'remote_port=(\d+)') {
+                $port = $matches[1]
+            } else {
+                Write-Host "Chua co port, dang doi them... ($($retryCount + 1)/15)"
+                $retryCount++
+            }
+        }
+        
+        if ($null -ne $port) {
             Write-Host "`n========================================"
             Write-Host " KET NOI RDP CUA BAN TAI:"
             Write-Host " Address : bore.pub:$port"
@@ -62,10 +73,11 @@ jobs:
             Write-Host " Password: (Secret ban da dat)"
             Write-Host "========================================`n"
         } else {
-            Write-Error "Khong the tao tunnel. Xem chi tiet log cua Bore de biet loi:"
-            Write-Host "--- LOG OUT ---"
+            # Bắt lỗi an toàn: In log ra trước rồi mới thoát script
+            Write-Host "=== THAT BAI: Khong the tao tunnel sau 60 giay ==="
+            Write-Host "--- CHI TIET LOG OUT ---"
             if (Test-Path bore_out.log) { cat bore_out.log }
-            Write-Host "--- LOG ERR ---"
+            Write-Host "--- CHI TIET LOG ERR ---"
             if (Test-Path bore_err.log) { cat bore_err.log }
             exit 1
         }
