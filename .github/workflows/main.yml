@@ -39,25 +39,28 @@ jobs:
         Expand-Archive bore.zip -DestinationPath .
         
         Write-Host "Khoi chay Bore Tunnel vao cong 3389..."
-        # Chạy Bore ngầm và ghi log
+        # Ép công cụ tắt các ký tự màu sắc ẩn để Regex dễ đọc
+        $env:NO_COLOR="1"
         Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -NoNewWindow -RedirectStandardOutput bore_out.log -RedirectStandardError bore_err.log
 
-    - name: 3. Lấy Thông tin Kết nối RDP (Vòng lặp chờ an toàn)
+    - name: 3. Lấy Thông tin Kết nối RDP (Phiên bản chống Lock File)
       run: |
         Write-Host "Dang doi Bore cap phat port..."
         $retryCount = 0
         $port = $null
         
-        # Vòng lặp chờ tối đa 15 lần (khoảng 60 giây) để đảm bảo server kịp phản hồi
         while ($null -eq $port -and $retryCount -lt 15) {
             Start-Sleep -Seconds 4
             $logContent = ""
             
-            # Đọc log để tìm port
-            if (Test-Path bore_out.log) { $logContent += Get-Content bore_out.log -Raw -ErrorAction SilentlyContinue }
-            if (Test-Path bore_err.log) { $logContent += Get-Content bore_err.log -Raw -ErrorAction SilentlyContinue }
+            # Copy file log ra một bản tạm để tránh lỗi Windows khóa file khi đang chạy ngầm
+            if (Test-Path bore_out.log) { Copy-Item bore_out.log temp_out.log -ErrorAction SilentlyContinue; $logContent += Get-Content temp_out.log -Raw -ErrorAction SilentlyContinue }
+            if (Test-Path bore_err.log) { Copy-Item bore_err.log temp_err.log -ErrorAction SilentlyContinue; $logContent += Get-Content temp_err.log -Raw -ErrorAction SilentlyContinue }
             
-            if ($logContent -match 'remote_port=(\d+)') {
+            # Regex quét nâng cao: Bỏ qua mọi ký tự lạ (như mã màu) để tóm gọn đúng số Port
+            if ($logContent -match 'bore\.pub[^\d]*(\d+)') {
+                $port = $matches[1]
+            } elseif ($logContent -match 'remote_port[^\d]*(\d+)') {
                 $port = $matches[1]
             } else {
                 Write-Host "Chua co port, dang doi them... ($($retryCount + 1)/15)"
@@ -73,7 +76,6 @@ jobs:
             Write-Host " Password: (Secret ban da dat)"
             Write-Host "========================================`n"
         } else {
-            # Bắt lỗi an toàn: In log ra trước rồi mới thoát script
             Write-Host "=== THAT BAI: Khong the tao tunnel sau 60 giay ==="
             Write-Host "--- CHI TIET LOG OUT ---"
             if (Test-Path bore_out.log) { cat bore_out.log }
