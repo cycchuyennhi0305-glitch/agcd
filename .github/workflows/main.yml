@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on:ABCVP9
+    runs-on: windows-2022
     timeout-minutes: 9999
 
     steps:
