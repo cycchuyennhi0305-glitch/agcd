@@ -32,40 +32,48 @@ jobs:
           Write-Error "Thieu NGROK_AUTH_TOKEN trong Repository Secrets!"
           exit 1
         }
-        # Thêm Auth Token của bạn
         ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
         
         Write-Host "Khoi chay Ngrok vao cong 3389..."
-        Start-Process -FilePath ngrok -ArgumentList "tcp 3389 --region ap --log=ngrok.log" -NoNewWindow
+        # Đã gỡ bỏ cờ --region ap theo cảnh báo mới nhất của Ngrok
+        Start-Process -FilePath ngrok -ArgumentList "tcp 3389 --log=ngrok.log" -NoNewWindow
 
-    - name: 4. Lấy Thông tin Kết nối RDP (Vòng lặp an toàn)
+    - name: 4. Lấy Thông tin Kết nối RDP (Đọc Log Trực Tiếp)
       run: |
         Write-Host "Dang doi Ngrok cap phat dia chi..."
         $retryCount = 0
-        $ngrokApi = $null
+        $address = $null
         
-        # Vòng lặp kiểm tra API nội bộ của Ngrok
-        while ($null -eq $ngrokApi -and $retryCount -lt 12) {
-            Start-Sleep -Seconds 5
-            try {
-                $ngrokApi = Invoke-RestMethod http://localhost:4040/api/tunnels -ErrorAction Stop
-            } catch {
-                Write-Host "Chua co dia chi, dang doi them... ($($retryCount + 1)/12)"
+        # Đọc trực tiếp từ file log thay vì gọi API nội bộ
+        while ($null -eq $address -and $retryCount -lt 15) {
+            Start-Sleep -Seconds 4
+            if (Test-Path ngrok.log) {
+                # Copy file ra bản nháp để tránh lỗi Windows khóa file
+                Copy-Item ngrok.log temp_ngrok.log -ErrorAction SilentlyContinue
+                $logContent = Get-Content temp_ngrok.log -Raw -ErrorAction SilentlyContinue
+                
+                # Tìm url TCP do ngrok in ra
+                if ($logContent -match 'url=(tcp://[a-zA-Z0-9.-]+:\d+)') {
+                    $address = $matches[1]
+                    # Xóa chữ tcp:// để form đúng chuẩn cho Remote Desktop
+                    $address = $address -replace 'tcp://', ''
+                }
+            }
+            if ($null -eq $address) {
+                Write-Host "Chua tim thay log, dang doi them... ($($retryCount + 1)/15)"
                 $retryCount++
             }
         }
         
-        if ($null -ne $ngrokApi) {
-            $publicUrl = $ngrokApi.tunnels.public_url
+        if ($null -ne $address) {
             Write-Host "`n========================================"
             Write-Host " KET NOI RDP CUA BAN TAI:"
-            Write-Host " Address : $publicUrl"
+            Write-Host " Address : $address"
             Write-Host " Username: runneradmin"
             Write-Host " Password: (Secret ban da dat)"
             Write-Host "========================================`n"
         } else {
             Write-Host "=== THAT BAI: Khong the tao tunnel ===`n"
-            Write-Host "Kiem tra xem ban da add the vao tai khoan Ngrok chua nhe!"
             if (Test-Path ngrok.log) { cat ngrok.log }
             exit 1
         }
