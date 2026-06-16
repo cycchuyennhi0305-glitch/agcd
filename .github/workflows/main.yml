@@ -1,86 +1,81 @@
-name: WindowsLatest_RDP
+name: Windows2022
 
 on: 
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 9999
 
     steps:
-    - name: 1. Cài đặt Ngrok
-      run: choco install ngrok -y
+    - name: 1. Cài đặt Ngrok mới nhất qua Chocolatey
+      run: |
+        # Sử dụng choco để cài đặt ngrok giúp tránh lỗi link tải bị hỏng
+        choco install ngrok -y
 
-    - name: 2. Kích hoạt RDP và Cấu hình Mật khẩu
+    - name: 2. Kết nối Tài khoản Ngrok
+      run: |
+        if ("${{ secrets.NGROK_AUTH_TOKEN }}" -eq "") {
+          Write-Error "Loi: Thieu NGROK_AUTH_TOKEN trong Repository Secrets!"
+          exit 1
+        }
+        # Ngrok v3 dùng lệnh 'config add-authtoken'
+        ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+
+    - name: 3. Kích hoạt RDP và Cấu hình Mật khẩu
       run: | 
         $pass = "${{ secrets.RDP_PASSWORD }}"
         if ($pass -eq "") { $pass = "P@ssword1234" }
         net user runneradmin $pass
         
-        # Mở khóa cho phép kết nối RDP
+        # Cấu hình hệ thống cho phép RDP
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
         
-        # Tắt NLA để tránh lỗi xác thực giao thức qua Tunnel đường truyền công cộng
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1
-        
-        # Tắt TOÀN BỘ Firewall để luồng mạng thông suốt tuyệt đối
-        Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
-        
-        # LƯU Ý: Tuyệt đối KHÔNG restart dịch vụ TermService trên máy ảo GitHub
+        # Mở Firewall cho cổng 3389
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389
 
-    - name: 3. Khởi tạo Tunnel bằng Ngrok
+    - name: 4. Khởi tạo Tunnel Ngrok (Port 3389)
       run: |
-        if ("${{ secrets.NGROK_AUTH_TOKEN }}" -eq "") {
-          Write-Error "Thieu NGROK_AUTH_TOKEN!"
-          exit 1
-        }
-        ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-        
-        Write-Host "Khoi chay Ngrok vao cong 3389..."
-        Start-Process -FilePath ngrok -ArgumentList "tcp 3389 --log=ngrok.log" -NoNewWindow
+        # Chạy ngrok v3 ở chế độ nền trỏ về vùng mặc định tối ưu nhất
+        Start-Process ngrok -ArgumentList "tcp 3389"
 
-    - name: 4. Lấy Thông tin Kết nối RDP
+    - name: 5. Lấy Thông tin Kết nối RDP (Có cơ chế Retry)
       run: |
-        Write-Host "Dang doi Ngrok cap phat dia chi..."
+        Write-Host "Dang doi Ngrok lay dia chi tunnel..."
         $retryCount = 0
-        $address = $null
-        
-        while ($null -eq $address -and $retryCount -lt 15) {
-            Start-Sleep -Seconds 4
-            if (Test-Path ngrok.log) {
-                Copy-Item ngrok.log temp_ngrok.log -ErrorAction SilentlyContinue
-                $logContent = Get-Content temp_ngrok.log -Raw -ErrorAction SilentlyContinue
-                
-                if ($logContent -match 'url=(tcp://[a-zA-Z0-9.-]+:\d+)') {
-                    $address = $matches[1]
-                    $address = $address -replace 'tcp://', ''
-                }
-            }
-            if ($null -eq $address) {
-                Write-Host "Chua tim thay log, dang doi them... ($($retryCount + 1)/15)"
+        $ngrokApi = $null
+        while ($null -eq $ngrokApi -and $retryCount -lt 6) {
+            try {
+                $ngrokApi = Invoke-RestMethod http://localhost:4040/api/tunnels -ErrorAction Stop
+            } catch {
+                Write-Host "Dang thu lai... ($($retryCount + 1)/6)"
+                Start-Sleep -Seconds 10
                 $retryCount++
             }
         }
         
-        if ($null -ne $address) {
+        if ($null -ne $ngrokApi) {
+            $publicUrl = $ngrokApi.tunnels.public_url
+            # Xóa chữ tcp:// để bạn tiện copy paste trực tiếp vào RDP client
+            $cleanAddress = $publicUrl -replace 'tcp://', ''
+            
             Write-Host "`n========================================"
             Write-Host " KET NOI RDP CUA BAN TAI:"
-            Write-Host " Address : $address"
-            Write-Host " Username: runneradmin"
+            Write-Host " Address : $cleanAddress"
+            Write-Host " Username: .\runneradmin"
             Write-Host " Password: (Secret ban da dat)"
             Write-Host "========================================`n"
         } else {
-            Write-Host "=== THAT BAI: Khong the tao tunnel ===`n"
-            if (Test-Path ngrok.log) { cat ngrok.log }
+            Write-Error "Khong the ket noi voi Ngrok API."
             exit 1
         }
 
-    - name: 5. Duy trì Workflow
+    - name: 6. Duy trì Workflow (Đã tối ưu chống spam log)
       run: |
-        Write-Host "He thong RDP dang chay ngon lanh! Ban co the ket noi ngay bay gio."
+        Write-Host "May ao dang duy tri trang thai hoat dong..."
         while ($true) {
             Start-Sleep -Seconds 300
-            Write-Host "Ping... Workflow van dang hoat dong tot."
         }
