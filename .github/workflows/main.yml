@@ -1,12 +1,12 @@
-name: Windows2019_RDP
+name: WindowsLatest_RDP
 
 on: 
   workflow_dispatch:
 
 jobs:
   build:
-    # CHUYỂN SANG DÙNG WINDOWS SERVER 2019 ĐỂ TRÁNH LỖI BẢO MẬT
-    runs-on: windows-2019
+    # Sử dụng cấu hình bản mới nhất để được cấp máy ảo nhanh nhất, tránh bị nghẽn hàng đợi
+    runs-on: windows-latest
     timeout-minutes: 9999
 
     steps:
@@ -19,13 +19,16 @@ jobs:
         if ($pass -eq "") { $pass = "P@ssword1234" }
         net user runneradmin $pass
         
-        # Cấu hình RDP cơ bản nhất cho Windows 2019 (Rất ổn định, không cần hạ Security Layer)
+        # Cấu hình RDP chuẩn mực cho Windows bản mới nhất
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
         
-        # Tắt tường lửa chặn luồng ngoài
+        # Mở tường lửa cho RDP và tắt tường lửa công cộng để chống chặn ngầm
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+        
+        # Áp dụng cấu hình mới cho dịch vụ RDP
+        Restart-Service TermService -Force
 
     - name: 3. Khởi tạo Tunnel bằng Ngrok
       run: |
@@ -36,9 +39,10 @@ jobs:
         ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
         
         Write-Host "Khoi chay Ngrok vao cong 3389..."
-        Start-Process -FilePath ngrok -ArgumentList "tcp 3389 --log=ngrok.log" -NoNewWindow
+        # Ép Ngrok chạy qua IPv4 127.0.0.1 để đảm bảo độ chính xác
+        Start-Process -FilePath ngrok -ArgumentList "tcp 127.0.0.1:3389 --log=ngrok.log" -NoNewWindow
 
-    - name: 4. Lấy Thông tin Kết nối RDP
+    - name: 4. Lấy Thông tin Kết nối RDP (Trích xuất Log)
       run: |
         Write-Host "Dang doi Ngrok cap phat dia chi..."
         $retryCount = 0
