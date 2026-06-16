@@ -9,82 +9,68 @@ jobs:
     timeout-minutes: 9999
 
     steps:
-    - name: 1. Kích hoạt RDP và Cấu hình Mật khẩu
+    - name: 1. Cài đặt Ngrok
+      run: choco install ngrok -y
+
+    - name: 2. Kích hoạt RDP và Cấu hình Mật khẩu
       run: | 
         $pass = "${{ secrets.RDP_PASSWORD }}"
         if ($pass -eq "") { $pass = "P@ssword1234" }
         net user runneradmin $pass
         
-        # Cho phép kết nối RDP
+        # Cho phép RDP và hạ lớp bảo mật để tránh lỗi "Cannot connect"
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-        
-        # Tắt NLA và hạ mức Security Layer để tương thích với cổng Tunnel
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1
         
-        # Mở Firewall cho cổng 3389
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-        
-        # [QUAN TRỌNG] Cho phép RDP nhận dữ liệu Loopback từ Tunnel (127.0.0.1)
-        New-NetFirewallRule -DisplayName "RDP Loopback" -Direction Inbound -LocalPort 3389 -Protocol TCP -LocalAddress 127.0.0.1 -Action Allow
-        
-        # Ghi chú: KHÔNG dùng Restart-Service TermService ở môi trường Github Actions
+        # Tắt TOÀN BỘ Firewall để luồng mạng thông suốt 100%
+        Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 
-    - name: 2. Tải và Khởi tạo Tunnel bằng Bore
+    - name: 3. Khởi tạo Tunnel bằng Ngrok
       run: |
-        Write-Host "Dang tai cong cu Bore Tunnel..."
-        Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-pc-windows-msvc.zip" -OutFile bore.zip
-        Expand-Archive bore.zip -DestinationPath .
+        if ("${{ secrets.NGROK_AUTH_TOKEN }}" -eq "") {
+          Write-Error "Thieu NGROK_AUTH_TOKEN trong Repository Secrets!"
+          exit 1
+        }
+        # Thêm Auth Token của bạn
+        ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
         
-        # [QUAN TRỌNG] Cấp quyền Firewall In/Out cho công cụ Bore
-        New-NetFirewallRule -DisplayName "Allow Bore" -Direction Inbound -Program "$PWD\bore.exe" -Action Allow
-        New-NetFirewallRule -DisplayName "Allow Bore Out" -Direction Outbound -Program "$PWD\bore.exe" -Action Allow
-        
-        Write-Host "Khoi chay Bore Tunnel vao cong 3389..."
-        $env:NO_COLOR="1"
-        Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -NoNewWindow -RedirectStandardOutput bore_out.log -RedirectStandardError bore_err.log
+        Write-Host "Khoi chay Ngrok vao cong 3389..."
+        Start-Process -FilePath ngrok -ArgumentList "tcp 3389 --region ap --log=ngrok.log" -NoNewWindow
 
-    - name: 3. Lấy Thông tin Kết nối RDP
+    - name: 4. Lấy Thông tin Kết nối RDP (Vòng lặp an toàn)
       run: |
-        Write-Host "Dang doi Bore cap phat port..."
+        Write-Host "Dang doi Ngrok cap phat dia chi..."
         $retryCount = 0
-        $port = $null
+        $ngrokApi = $null
         
-        while ($null -eq $port -and $retryCount -lt 15) {
-            Start-Sleep -Seconds 4
-            $logContent = ""
-            
-            # Đọc log an toàn chống khóa file
-            if (Test-Path bore_out.log) { Copy-Item bore_out.log temp_out.log -ErrorAction SilentlyContinue; $logContent += Get-Content temp_out.log -Raw -ErrorAction SilentlyContinue }
-            if (Test-Path bore_err.log) { Copy-Item bore_err.log temp_err.log -ErrorAction SilentlyContinue; $logContent += Get-Content temp_err.log -Raw -ErrorAction SilentlyContinue }
-            
-            if ($logContent -match 'bore\.pub[^\d]*(\d+)') {
-                $port = $matches[1]
-            } elseif ($logContent -match 'remote_port[^\d]*(\d+)') {
-                $port = $matches[1]
-            } else {
-                Write-Host "Chua co port, dang doi them... ($($retryCount + 1)/15)"
+        # Vòng lặp kiểm tra API nội bộ của Ngrok
+        while ($null -eq $ngrokApi -and $retryCount -lt 12) {
+            Start-Sleep -Seconds 5
+            try {
+                $ngrokApi = Invoke-RestMethod http://localhost:4040/api/tunnels -ErrorAction Stop
+            } catch {
+                Write-Host "Chua co dia chi, dang doi them... ($($retryCount + 1)/12)"
                 $retryCount++
             }
         }
         
-        if ($null -ne $port) {
+        if ($null -ne $ngrokApi) {
+            $publicUrl = $ngrokApi.tunnels.public_url
             Write-Host "`n========================================"
             Write-Host " KET NOI RDP CUA BAN TAI:"
-            Write-Host " Address : bore.pub:$port"
+            Write-Host " Address : $publicUrl"
             Write-Host " Username: runneradmin"
             Write-Host " Password: (Secret ban da dat)"
             Write-Host "========================================`n"
         } else {
-            Write-Host "=== THAT BAI: Khong the tao tunnel sau 60 giay ==="
-            Write-Host "--- CHI TIET LOG OUT ---"
-            if (Test-Path bore_out.log) { cat bore_out.log }
-            Write-Host "--- CHI TIET LOG ERR ---"
-            if (Test-Path bore_err.log) { cat bore_err.log }
+            Write-Host "=== THAT BAI: Khong the tao tunnel ===`n"
+            Write-Host "Kiem tra xem ban da add the vao tai khoan Ngrok chua nhe!"
+            if (Test-Path ngrok.log) { cat ngrok.log }
             exit 1
         }
 
-    - name: 4. Duy trì Workflow
+    - name: 5. Duy trì Workflow
       run: |
         Write-Host "He thong RDP dang chay ngon lanh! Ban co the ket noi ngay bay gio."
         while ($true) {
